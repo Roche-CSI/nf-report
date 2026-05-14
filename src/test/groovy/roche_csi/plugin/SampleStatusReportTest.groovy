@@ -48,13 +48,12 @@ class SampleStatusReportTest extends Specification {
         return record
     }
 
-    private NfReportObserver createObserverWithSampleStatusReport() {
+    private NfReportObserver createObserverWithSampleStatusReport(Map extraConfig = [:]) {
         def session = new Session()
+        def reportConfig = [enabled: true] + extraConfig
         session.config = [
             nfreport: [
-                sampleStatusReport: [
-                    enabled: true
-                ]
+                sampleStatusReport: reportConfig
             ]
         ]
 
@@ -420,6 +419,116 @@ class SampleStatusReportTest extends Specification {
         assert failedIds == ['sampleA']
         assert partialIds == ['sampleB']
         assert completedIds == ['sampleC']
+    }
+
+    def 'completion summary lists samples by status'() {
+        given:
+        def observer = createObserverWithSampleStatusReport(printCompletionSummary: true)
+        def sampleStatusReport = getSampleStatusReport(observer)
+
+        // sampleA: all completed -> COMPLETED
+        def hA = createHandler('task1', 'sampleA', 100, 0)
+        def rA = createRecord(status: 'COMPLETED')
+
+        // sampleB: completed + ignored failure -> PARTIALLY_COMPLETED
+        def hB1 = createHandler('task1', 'sampleB', 200, 0)
+        def hB2 = createHandler('task2', 'sampleB', 201, 1)
+        def rB1 = createRecord(status: 'COMPLETED')
+        def rB2 = createRecord(status: 'FAILED', error_action: 'IGNORE')
+
+        // sampleC: all ignored failures -> FAILED
+        def hC = createHandler('task1', 'sampleC', 300, 1)
+        def rC = createRecord(status: 'FAILED', error_action: 'IGNORE')
+
+        // sampleD: retry in progress -> PENDING
+        def hD = createHandler('task1', 'sampleD', 400, 1)
+        def rD = createRecord(status: 'FAILED', error_action: 'RETRY', attempt: 1)
+
+        when:
+        sampleStatusReport.onTaskComplete(hA, rA)
+        sampleStatusReport.onTaskComplete(hB1, rB1)
+        sampleStatusReport.onTaskComplete(hB2, rB2)
+        sampleStatusReport.onTaskComplete(hC, rC)
+        sampleStatusReport.onTaskComplete(hD, rD)
+
+        then:
+        def summary = sampleStatusReport.buildCompletionSummary()
+        assert summary.contains('=== Sample Status Summary ===')
+        assert summary.contains('Completed (1):')
+        assert summary.contains('  - sampleA')
+        assert summary.contains('Partially Completed (1):')
+        assert summary.contains('  - sampleB')
+        assert summary.contains('Failed (1):')
+        assert summary.contains('  - sampleC')
+        assert summary.contains('Pending (1):')
+        assert summary.contains('  - sampleD')
+    }
+
+    def 'completion summary includes report file path'() {
+        given:
+        def observer = createObserverWithSampleStatusReport(printCompletionSummary: true)
+        def sampleStatusReport = getSampleStatusReport(observer)
+
+        def handler = createHandler('task1', 'sample1', 100, 0)
+        def record = createRecord(status: 'COMPLETED')
+
+        when:
+        sampleStatusReport.onTaskComplete(handler, record)
+
+        then:
+        def summary = sampleStatusReport.buildCompletionSummary()
+        assert summary.contains('Report:')
+        assert summary.contains('sample-status-report.json')
+    }
+
+    def 'completion summary omits empty status sections'() {
+        given:
+        def observer = createObserverWithSampleStatusReport(printCompletionSummary: true)
+        def sampleStatusReport = getSampleStatusReport(observer)
+
+        // Only completed samples
+        def h1 = createHandler('task1', 'sample1', 100, 0)
+        def h2 = createHandler('task1', 'sample2', 101, 0)
+        def r1 = createRecord(status: 'COMPLETED')
+        def r2 = createRecord(status: 'COMPLETED')
+
+        when:
+        sampleStatusReport.onTaskComplete(h1, r1)
+        sampleStatusReport.onTaskComplete(h2, r2)
+
+        then:
+        def summary = sampleStatusReport.buildCompletionSummary()
+        assert summary.contains('Completed (2):')
+        assert !summary.contains('Failed')
+        assert !summary.contains('Partially Completed')
+        assert !summary.contains('Pending')
+    }
+
+    def 'completion summary sorts sample names alphabetically'() {
+        given:
+        def observer = createObserverWithSampleStatusReport(printCompletionSummary: true)
+        def sampleStatusReport = getSampleStatusReport(observer)
+
+        def hC = createHandler('task1', 'charlie', 100, 0)
+        def hA = createHandler('task1', 'alpha', 101, 0)
+        def hB = createHandler('task1', 'bravo', 102, 0)
+        def rC = createRecord(status: 'COMPLETED')
+        def rA = createRecord(status: 'COMPLETED')
+        def rB = createRecord(status: 'COMPLETED')
+
+        when:
+        // Submit in non-alphabetical order
+        sampleStatusReport.onTaskComplete(hC, rC)
+        sampleStatusReport.onTaskComplete(hA, rA)
+        sampleStatusReport.onTaskComplete(hB, rB)
+
+        then:
+        def summary = sampleStatusReport.buildCompletionSummary()
+        def alphaIdx = summary.indexOf('  - alpha')
+        def bravoIdx = summary.indexOf('  - bravo')
+        def charlieIdx = summary.indexOf('  - charlie')
+        assert alphaIdx < bravoIdx
+        assert bravoIdx < charlieIdx
     }
 
 }

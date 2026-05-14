@@ -274,4 +274,72 @@ nextflow_pipeline {
             }
         }
     }
+
+    test("Completion summary is printed when printCompletionSummary is enabled") {
+        config "configs/sample_report_with_completion_summary.config"
+        when {
+            params.run_processes_always_fail = true
+            params.run_processes_always_succeed = true
+            params.include_samples_that_never_fail = true
+        }
+        then {
+            assert workflow.success
+            assert path("$launchDir/reports/sample-status-report.json").exists()
+            def sampleStatusReport = path("$launchDir/reports/sample-status-report.json").json
+            // Verify the report content is correct with printCompletionSummary enabled
+            assert sampleStatusReport.summary.total_samples == 5
+            assert sampleStatusReport.summary.partially_completed == 3
+            assert sampleStatusReport.summary.completed == 2
+        }
+    }
+
+    test("Task with Collection sample ID attributes to all samples in the list") {
+        config "configs/extract_multi_sample_from_meta.config"
+        when {
+            // Run multi-sample process: task1 -> [sample1, sample2], task2 -> [sample3]
+            params.run_processes_multi_sample = true
+        }
+        then {
+            assert workflow.success
+            assert path("$launchDir/reports/sample-status-report.json").exists()
+            def sampleStatusReport = path("$launchDir/reports/sample-status-report.json").json
+            // 3 distinct samples across 2 tasks
+            assert sampleStatusReport.summary.total_samples == 3
+            assert sampleStatusReport.summary.completed == 3
+            def completedIds = sampleStatusReport.samples_by_status.COMPLETED.collect { it.sample_id }.sort()
+            assert completedIds == ['sample1', 'sample2', 'sample3']
+            // sample1 and sample2 share the same task
+            def sample1 = sampleStatusReport.samples_by_status.COMPLETED.find { it.sample_id == 'sample1' }
+            def sample2 = sampleStatusReport.samples_by_status.COMPLETED.find { it.sample_id == 'sample2' }
+            def sample3 = sampleStatusReport.samples_by_status.COMPLETED.find { it.sample_id == 'sample3' }
+            assert sample1.task_counts.total == 1
+            assert sample2.task_counts.total == 1
+            assert sample3.task_counts.total == 1
+        }
+    }
+
+    test("Collection sample IDs with mixed success and failure") {
+        config "configs/extract_multi_sample_from_meta.config"
+        when {
+            // Multi-sample tasks + always-succeed tasks (which use single sample_name strings)
+            params.run_processes_multi_sample = true
+            params.run_processes_always_succeed = true
+        }
+        then {
+            assert workflow.success
+            assert path("$launchDir/reports/sample-status-report.json").exists()
+            def sampleStatusReport = path("$launchDir/reports/sample-status-report.json").json
+            // 3 samples: each has tasks from both multi-sample and always-succeed processes
+            assert sampleStatusReport.summary.total_samples == 3
+            assert sampleStatusReport.summary.completed == 3
+            // sample1 and sample2 get 1 multi-sample task + 2 always-succeed tasks = 3
+            def sample1 = sampleStatusReport.samples_by_status.COMPLETED.find { it.sample_id == 'sample1' }
+            def sample2 = sampleStatusReport.samples_by_status.COMPLETED.find { it.sample_id == 'sample2' }
+            assert sample1.task_counts.total == 3
+            assert sample2.task_counts.total == 3
+            // sample3 gets 1 multi-sample task + 2 always-succeed tasks = 3
+            def sample3 = sampleStatusReport.samples_by_status.COMPLETED.find { it.sample_id == 'sample3' }
+            assert sample3.task_counts.total == 3
+        }
+    }
 }
