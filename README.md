@@ -7,7 +7,7 @@ A comprehensive reporting plugin for Nextflow that generates various reports dur
 The nf-report plugin provides multiple configurable report types:
 
 - **Execution Report**: Provides a detailed overview of the workflow execution, including start/end times, parameters, and metadata.
-- **Task Status Report**: Summarizes task execution details grouped by status (e.g., COMPLETED, FAILED, CACHED).
+- **Task Status Report**: Summarizes task execution details grouped by status (e.g., COMPLETED, FAILED, CACHED, RETRIED, ABORTED, IGNORED).
 - **Sample Status Report**: Tracks sample processing across the workflow, with samples grouped by their processing status.
 
 The reports can be generated in JSON and HTML formats, with customizable templates for HTML reports.
@@ -192,4 +192,4 @@ make assemble
 The plugin can be tested without a local Nextflow installation:
 
 1. Build and install the plugin to your local Nextflow installation: `make install`
-2. Run a pipeline with the plugin: `nextflow run hello -plugins nf-report@0.1.0`
+2. Run a pipeline with the plugin: `nextflow run hello -plugins nf-report@1.1.0`

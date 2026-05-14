@@ -242,4 +242,184 @@ class SampleStatusReportTest extends Specification {
         assert result.summary.pending == 1
     }
 
+    def 'sample status report with a single sample where all tasks are ignored failures'() {
+        given:
+        def observer = createObserverWithSampleStatusReport()
+        def sampleStatusReport = getSampleStatusReport(observer)
+
+        def handler1 = createHandler('task1', 'sample1', 100, 1)
+        def handler2 = createHandler('task2', 'sample1', 101, 1)
+
+        def record1 = createRecord(status: 'FAILED', error_action: 'IGNORE', attempt: 1)
+        def record2 = createRecord(status: 'FAILED', error_action: 'IGNORE', attempt: 1)
+
+        when:
+        sampleStatusReport.onTaskComplete(handler1, record1)
+        sampleStatusReport.onTaskComplete(handler2, record2)
+
+        then:
+        def result = sampleStatusReport.toMap()
+        assert result != null
+        // All tasks were ignored failures, so the sample is FAILED
+        assert result.summary.total_samples == 1
+        assert result.summary.failed == 1
+        assert result.summary.completed == 0
+        assert result.summary.partially_completed == 0
+        def sample = result.samples_by_status.FAILED[0]
+        assert sample.task_counts.failure_ignored == 2
+        assert sample.task_counts.failed == 0
+        assert sample.task_counts.total == 2
+    }
+
+    def 'sample status report with a single sample with mix of completed and ignored failures'() {
+        given:
+        def observer = createObserverWithSampleStatusReport()
+        def sampleStatusReport = getSampleStatusReport(observer)
+
+        def handler1 = createHandler('task1', 'sample1', 100, 0)
+        def handler2 = createHandler('task2', 'sample1', 101, 1)
+
+        def record1 = createRecord(status: 'COMPLETED', attempt: 1)
+        def record2 = createRecord(status: 'FAILED', error_action: 'IGNORE', attempt: 1)
+
+        when:
+        sampleStatusReport.onTaskComplete(handler1, record1)
+        sampleStatusReport.onTaskComplete(handler2, record2)
+
+        then:
+        def result = sampleStatusReport.toMap()
+        assert result != null
+        assert result.summary.total_samples == 1
+        assert result.summary.partially_completed == 1
+        assert result.summary.completed == 0
+        assert result.summary.failed == 0
+        def sample = result.samples_by_status.PARTIALLY_COMPLETED[0]
+        assert sample.task_counts.completed == 1
+        assert sample.task_counts.failure_ignored == 1
+        assert sample.task_counts.total == 2
+    }
+
+    def 'sample status report with ignored failure and successful retry remains partially completed'() {
+        given:
+        def observer = createObserverWithSampleStatusReport()
+        def sampleStatusReport = getSampleStatusReport(observer)
+
+        // Task that failed and was ignored
+        def handler1 = createHandler('task1', 'sample1', 100, 1)
+        def record1 = createRecord(status: 'FAILED', error_action: 'IGNORE', attempt: 1)
+
+        // Task that failed, was retried, and succeeded
+        def handler2 = createHandler('task2', 'sample1', 101, 1)
+        def record2 = createRecord(status: 'FAILED', error_action: 'RETRY', attempt: 1, start: 1500, complete: 2000, duration: 500)
+        def handler3 = createHandler('task2', 'sample1', 102, 0, 2000, 2500)
+        def record3 = createRecord(status: 'COMPLETED', attempt: 2, start: 2500, complete: 3000, duration: 500)
+
+        when:
+        sampleStatusReport.onTaskComplete(handler1, record1)
+        sampleStatusReport.onTaskComplete(handler2, record2)
+        sampleStatusReport.onTaskComplete(handler3, record3)
+
+        then:
+        def result = sampleStatusReport.toMap()
+        assert result != null
+        // Ignored failure prevents COMPLETED even though retry resolved
+        assert result.summary.total_samples == 1
+        assert result.summary.partially_completed == 1
+        assert result.summary.completed == 0
+        def sample = result.samples_by_status.PARTIALLY_COMPLETED[0]
+        assert sample.task_counts.failure_ignored == 1
+        assert sample.task_counts.failure_retried == 1
+        assert sample.task_counts.completed == 1
+        assert sample.task_counts.total == 3
+    }
+
+    def 'sample task_counts include all counter fields with correct values'() {
+        given:
+        def observer = createObserverWithSampleStatusReport()
+        def sampleStatusReport = getSampleStatusReport(observer)
+
+        def h1 = createHandler('task1', 'sample1', 100, 0)
+        def h2 = createHandler('task2', 'sample1', 101, 0)
+        def h3 = createHandler('task3', 'sample1', 102, 1)
+        def h4 = createHandler('task4', 'sample1', 103, 1)
+        def h5 = createHandler('task5', 'sample1', 104, 1)
+        def h6 = createHandler('task6', 'sample1', 105, 1)
+
+        def r1 = createRecord(status: 'COMPLETED', attempt: 1)
+        def r2 = createRecord(status: 'COMPLETED', attempt: 1)  // will be sent as cached
+        def r3 = createRecord(status: 'FAILED', attempt: 1)
+        def r4 = createRecord(status: 'ABORTED', attempt: 1)
+        def r5 = createRecord(status: 'FAILED', error_action: 'RETRY', attempt: 1)
+        def r6 = createRecord(status: 'FAILED', error_action: 'IGNORE', attempt: 1)
+
+        when:
+        sampleStatusReport.onTaskComplete(h1, r1)
+        sampleStatusReport.onTaskCached(h2, r2)
+        sampleStatusReport.onTaskComplete(h3, r3)
+        sampleStatusReport.onTaskComplete(h4, r4)
+        sampleStatusReport.onTaskComplete(h5, r5)
+        sampleStatusReport.onTaskComplete(h6, r6)
+
+        then:
+        def result = sampleStatusReport.toMap()
+        assert result != null
+        assert result.summary.total_samples == 1
+        // Sample has failures so it's partially completed (has completed + cached tasks too)
+        assert result.summary.partially_completed == 1
+        def sample = result.samples_by_status.PARTIALLY_COMPLETED[0]
+        assert sample.task_counts.total == 6
+        assert sample.task_counts.completed == 1
+        assert sample.task_counts.cached == 1
+        assert sample.task_counts.failed == 1
+        assert sample.task_counts.aborted == 1
+        assert sample.task_counts.failure_retried == 1
+        assert sample.task_counts.failure_ignored == 1
+    }
+
+    def 'multiple samples with different ignored-failure outcomes'() {
+        given:
+        def observer = createObserverWithSampleStatusReport()
+        def sampleStatusReport = getSampleStatusReport(observer)
+
+        // Sample A: all ignored failures -> FAILED
+        def hA1 = createHandler('task1', 'sampleA', 100, 1)
+        def hA2 = createHandler('task2', 'sampleA', 101, 1)
+        def rA1 = createRecord(status: 'FAILED', error_action: 'IGNORE', attempt: 1)
+        def rA2 = createRecord(status: 'FAILED', error_action: 'IGNORE', attempt: 1)
+
+        // Sample B: completed + ignored failure -> PARTIALLY_COMPLETED
+        def hB1 = createHandler('task1', 'sampleB', 200, 0)
+        def hB2 = createHandler('task2', 'sampleB', 201, 1)
+        def rB1 = createRecord(status: 'COMPLETED', attempt: 1)
+        def rB2 = createRecord(status: 'FAILED', error_action: 'IGNORE', attempt: 1)
+
+        // Sample C: all completed -> COMPLETED
+        def hC1 = createHandler('task1', 'sampleC', 300, 0)
+        def hC2 = createHandler('task2', 'sampleC', 301, 0)
+        def rC1 = createRecord(status: 'COMPLETED', attempt: 1)
+        def rC2 = createRecord(status: 'COMPLETED', attempt: 1)
+
+        when:
+        sampleStatusReport.onTaskComplete(hA1, rA1)
+        sampleStatusReport.onTaskComplete(hA2, rA2)
+        sampleStatusReport.onTaskComplete(hB1, rB1)
+        sampleStatusReport.onTaskComplete(hB2, rB2)
+        sampleStatusReport.onTaskComplete(hC1, rC1)
+        sampleStatusReport.onTaskComplete(hC2, rC2)
+
+        then:
+        def result = sampleStatusReport.toMap()
+        assert result != null
+        assert result.summary.total_samples == 3
+        assert result.summary.failed == 1
+        assert result.summary.partially_completed == 1
+        assert result.summary.completed == 1
+        def failedIds = result.samples_by_status.FAILED.collect { it.sample_id }
+        def partialIds = result.samples_by_status.PARTIALLY_COMPLETED.collect { it.sample_id }
+        def completedIds = result.samples_by_status.COMPLETED.collect { it.sample_id }
+        assert failedIds == ['sampleA']
+        assert partialIds == ['sampleB']
+        assert completedIds == ['sampleC']
+    }
+
 }
