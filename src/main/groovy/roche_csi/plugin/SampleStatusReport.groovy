@@ -52,6 +52,8 @@ class SampleStatusReport extends BaseReport {
             def status = trace.get('status')?.toString() ?: 'COMPLETED'
             if (trace.get('error_action') == 'RETRY') {
                 status = 'RETRIED'
+            } else if (trace.get('error_action') == 'IGNORE') {
+                status = 'IGNORED'
             }
             updateSampleData(sampleId, handler, trace, status)
         }
@@ -162,7 +164,8 @@ class SampleStatusReport extends BaseReport {
                         cached: 0,
                         failed: 0,
                         aborted: 0,
-                        retried: 0
+                        failure_retried: 0,
+                        failure_ignored: 0,
                     ],
                     first_task_start: null,
                     last_task_complete: null,
@@ -229,7 +232,10 @@ class SampleStatusReport extends BaseReport {
                     sample.task_counts.aborted++
                     break
                 case 'RETRIED':
-                    sample.task_counts.retried++
+                    sample.task_counts.failure_retried++
+                    break
+                case 'IGNORED':
+                    sample.task_counts.failure_ignored++
                     break
             }
 
@@ -277,7 +283,7 @@ class SampleStatusReport extends BaseReport {
             }
 
             // Update overall sample status
-            if (sample.task_counts.failed + sample.task_counts.aborted > 0) {
+            if (sample.task_counts.failed + sample.task_counts.aborted + sample.task_counts.failure_ignored > 0) {
                 if (sample.task_counts.completed + sample.task_counts.cached > 0) {
                     sample.status = 'PARTIALLY_COMPLETED'
                 } else {
@@ -290,7 +296,7 @@ class SampleStatusReport extends BaseReport {
             }
 
             // For retried tasks, if there are any subsequent attempts that completed successfully, update status accordingly
-            if (sample.task_counts.retried > 0) {
+            if (sample.task_counts.failure_retried > 0) {
                 def allRetriesCompleted = true
                 // Iterate through tasks to check if all retried tasks eventually completed
                 sample.tasks.each { task ->
@@ -302,7 +308,7 @@ class SampleStatusReport extends BaseReport {
                     }
                 }
                 if (allRetriesCompleted) {
-                    if (sample.task_counts.failed + sample.task_counts.aborted > 0) {
+                    if (sample.task_counts.failed + sample.task_counts.aborted + sample.task_counts.failure_ignored > 0) {
                         sample.status = 'PARTIALLY_COMPLETED'
                     } else {
                         sample.status = 'COMPLETED'
@@ -370,10 +376,10 @@ class SampleStatusReport extends BaseReport {
 
     private void writeTsvReport() {
         def tsvContent = new StringBuilder()
-        tsvContent << 'sample_id\tstatus\ttotal_tasks\tcompleted_tasks\tcached_tasks\tfailed_tasks\taborted_tasks\tretried_tasks\n'
+        tsvContent << 'sample_id\tstatus\ttotal_tasks\tcompleted_tasks\tcached_tasks\tfailed_tasks\taborted_tasks\tretried_failures\tignored_failures\n'
         synchronized(sampleData) {
             sampleData.each { sampleId, sample ->
-                tsvContent << "${sampleId}\t${sample.status}\t${sample.task_counts.total}\t${sample.task_counts.completed}\t${sample.task_counts.cached}\t${sample.task_counts.failed}\t${sample.task_counts.aborted}\t${sample.task_counts.retried}\n"
+                tsvContent << "${sampleId}\t${sample.status}\t${sample.task_counts.total}\t${sample.task_counts.completed}\t${sample.task_counts.cached}\t${sample.task_counts.failed}\t${sample.task_counts.aborted}\t${sample.task_counts.failure_retried}\t${sample.task_counts.failure_ignored}\n"
             }
         }
         writeToFile(tsvContent.toString(), 'tsv')
