@@ -94,7 +94,13 @@ class SampleStatusReport extends BaseReport {
     }
 
     private void printSummary() {
-        log.info(buildCompletionSummary())
+        def summary = buildCompletionSummary()
+        def hasFailures = sampleData.values().any { it?.status in ['FAILED', 'PARTIALLY_COMPLETED'] }
+        if (hasFailures) {
+            log.warn(summary)
+        } else {
+            log.info(summary)
+        }
     }
 
     String buildCompletionSummary() {
@@ -135,8 +141,8 @@ class SampleStatusReport extends BaseReport {
             samplesByStatus['PENDING'].sort().each { sb << "  - ${it}\n" }
         }
 
-        // Include paths to generated report files
-        def reportPaths = outputFiles.values().collect { it.absolutePath }
+        // Include normalized paths to generated report files
+        def reportPaths = outputFiles.values().collect { it.toPath().toAbsolutePath().normalize().toString() }
         if (reportPaths) {
             sb << "\nReport: ${reportPaths.join(', ')}\n"
         }

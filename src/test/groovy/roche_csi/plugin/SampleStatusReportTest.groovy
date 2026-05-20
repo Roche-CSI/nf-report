@@ -481,6 +481,27 @@ class SampleStatusReportTest extends Specification {
         assert summary.contains('sample-status-report.json')
     }
 
+    def 'completion summary report path is normalized'() {
+        given:
+        // Default outputDir is './reports', which produces a path with '.' segment
+        def observer = createObserverWithSampleStatusReport(printCompletionSummary: true)
+        def sampleStatusReport = getSampleStatusReport(observer)
+
+        def handler = createHandler('task1', 'sample1', 100, 0)
+        def record = createRecord(status: 'COMPLETED')
+
+        when:
+        sampleStatusReport.onTaskComplete(handler, record)
+
+        then:
+        def summary = sampleStatusReport.buildCompletionSummary()
+        // Path should not contain /./  or /../ segments
+        def reportLine = summary.readLines().find { it.startsWith('Report:') }
+        assert reportLine != null
+        assert !reportLine.contains('/./') : "Path should not contain /./ segment: ${reportLine}"
+        assert !reportLine.contains('/../') : "Path should not contain /../ segment: ${reportLine}"
+    }
+
     def 'completion summary omits empty status sections'() {
         given:
         def observer = createObserverWithSampleStatusReport(printCompletionSummary: true)
